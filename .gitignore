@@ -1,0 +1,54 @@
+# ==============================================================================
+# AI Content Agentic System — .gitignore
+# ==============================================================================
+
+# --- Environment & Secrets ---
+.env
+.env.local
+.env.*.local
+
+# --- Python / Backend ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# --- Node.js / Frontend ---
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# --- Docker ---
+# (không ignore docker-compose.yml — cần commit)
+
+# --- Database & Storage ---
+postgres_data/
+chroma_data/
+n8n_data/
+
+# --- IDEs & OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

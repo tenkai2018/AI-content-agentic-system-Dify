@@ -1,0 +1,16 @@
+{
+  "manifest": {
+    "task_id": "test_001",
+    "screens": [
+      {
+        "id": "1",
+        "title": "Test Cảnh 1",
+        "description": "Đang test render video từ n8n",
+        "image_src": "/assets/generated/test_001/scene_1.png",
+        "duration_in_seconds": 3
+      }
+    ]
+  },
+  "bgmSrc": "",
+  "bgmVolume": 0.08
+}
