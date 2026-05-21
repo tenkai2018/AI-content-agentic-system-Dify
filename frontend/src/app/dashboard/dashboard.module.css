@@ -140,6 +140,19 @@
   color: var(--text-secondary);
   margin-bottom: 8px;
 }
+.textInput {
+  width: 100%;
+  background: #0d0f15;
+  color: #d8deea;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  outline: none;
+}
+.textInput:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(108, 99, 255, 0.25);
+}
 .resultJson {
   font-size: 0.78rem;
   line-height: 1.5;

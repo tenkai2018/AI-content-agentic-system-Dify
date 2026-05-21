@@ -1,111 +1,100 @@
-import pytest
+import os
 
-from app.agents import orchestrator
+os.environ["DATABASE_URL"] = "sqlite:///./test_app.db"
 
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-@pytest.mark.asyncio
-async def test_resume_topic_rejected_sets_failed():
-    state = {
-        "task_id": "t1",
-        "niche": "ai",
-        "keywords": [],
-        "language": "en",
-        "current_step": "viral_detection",
-        "status": "awaiting_topic_approval",
-        "error": None,
-        "viral_detection_result": {},
-        "selected_topic": None,
-        "script_result": None,
-        "thumbnail_brief": None,
-        "assets_result": None,
-        "video_result": None,
-        "linkedin_posts": None,
-        "topic_approved": False,
-        "script_approved": False,
-        "thumbnail_approved": False,
-        "assets_approved": False,
-    }
-
-    result = await orchestrator.resume_pipeline(state, step="topic", approved=False)
-    assert result["status"] == "failed"
-    assert "Topic rejected" in result["error"]
+from app.db.models import Base
+from app.db.session import get_db
+from app.main import app
 
 
-@pytest.mark.asyncio
-async def test_resume_assets_approved_continues(monkeypatch):
-    async def fake_video_producer(updated_state):
-        return {
-            **updated_state,
-            "current_step": "video_render",
-            "status": "repurposing",
-            "video_result": {"output_path": "/tmp/out.mp4"},
-            "error": None,
-        }
+def _build_client():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
 
-    async def fake_repurposer(updated_state):
-        return {
-            **updated_state,
-            "current_step": "linkedin_repurposing",
-            "status": "completed",
-            "linkedin_posts": {"posts": {}},
-            "error": None,
-        }
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
 
-    async def fake_seo(updated_state):
-        return {
-            **updated_state,
-            "current_step": "seo_optimization",
-            "status": "newsletter_generating",
-            "seo_result": {"youtube_title_options": ["a", "b", "c"]},
-            "error": None,
-        }
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+    return client
 
-    async def fake_newsletter(updated_state):
-        return {
-            **updated_state,
-            "current_step": "newsletter_generation",
-            "status": "analyzing",
-            "newsletter_result": {"subject_line": "hello"},
-            "error": None,
-        }
 
-    async def fake_analyst(updated_state):
-        return {
-            **updated_state,
-            "current_step": "performance_analysis",
-            "status": "completed",
-            "analyst_result": {"kpis": ["views"]},
-            "error": None,
-        }
+def test_workflow_end_to_end_happy_path():
+    client = _build_client()
 
-    monkeypatch.setattr(orchestrator, "video_producer_node", fake_video_producer)
-    monkeypatch.setattr(orchestrator, "repurposer_node", fake_repurposer)
-    monkeypatch.setattr(orchestrator, "seo_node", fake_seo)
-    monkeypatch.setattr(orchestrator, "newsletter_node", fake_newsletter)
-    monkeypatch.setattr(orchestrator, "analyst_node", fake_analyst)
+    start_res = client.post(
+        "/api/workflow/start",
+        json={"niche": "ai automation", "language": "en", "keywords": ["ai", "ops"]},
+    )
+    assert start_res.status_code == 200
+    start_body = start_res.json()
+    task_id = start_body["task_id"]
+    assert start_body["status"] == "awaiting_topic_approval"
+    assert "viral_detection_result" in start_body["outputs"]
 
-    state = {
-        "task_id": "t1",
-        "niche": "ai",
-        "keywords": [],
-        "language": "en",
-        "current_step": "asset_generation",
-        "status": "awaiting_assets_approval",
-        "error": None,
-        "viral_detection_result": {},
-        "selected_topic": {},
-        "script_result": {"script": {"full_script_text": "test."}},
-        "thumbnail_brief": {},
-        "assets_result": {"manifest_path": "/tmp/manifest.json"},
-        "video_result": None,
-        "linkedin_posts": None,
-        "topic_approved": True,
-        "script_approved": True,
-        "thumbnail_approved": True,
-        "assets_approved": False,
-    }
+    res_topic = client.post("/api/approve", json={"task_id": task_id, "step": "topic", "approved": True})
+    assert res_topic.status_code == 200
+    assert res_topic.json()["status"] == "awaiting_script_approval"
 
-    result = await orchestrator.resume_pipeline(state, step="assets", approved=True)
-    assert result["status"] == "completed"
-    assert result["video_result"]["output_path"] == "/tmp/out.mp4"
-    assert result["current_step"] == "performance_analysis"
+    res_script = client.post("/api/approve", json={"task_id": task_id, "step": "script", "approved": True})
+    assert res_script.status_code == 200
+    assert res_script.json()["status"] == "awaiting_thumbnail_approval"
+
+    res_thumb = client.post("/api/approve", json={"task_id": task_id, "step": "thumbnail", "approved": True})
+    assert res_thumb.status_code == 200
+    assert res_thumb.json()["status"] == "awaiting_assets_approval"
+
+    res_assets = client.post("/api/approve", json={"task_id": task_id, "step": "assets", "approved": True})
+    assert res_assets.status_code == 200
+    assert res_assets.json()["status"] == "completed"
+
+    status_res = client.get(f"/api/status/{task_id}")
+    assert status_res.status_code == 200
+    status_body = status_res.json()
+    assert status_body["status"] == "completed"
+    assert "video_result" in status_body["outputs"]
+    assert "linkedin_posts" in status_body["outputs"]
+
+    history_res = client.get(f"/api/workflow/{task_id}/history")
+    assert history_res.status_code == 200
+    events = history_res.json()["events"]
+    assert any(e["event_type"] == "run_started" for e in events)
+    assert any(e["event_type"] == "run_completed" for e in events)
+
+    artifacts_res = client.get(f"/api/workflow/{task_id}/artifacts")
+    assert artifacts_res.status_code == 200
+    artifacts = artifacts_res.json()
+    assert artifacts["video_result"] is not None
+
+    app.dependency_overrides.clear()
+
+
+def test_workflow_reject_fails():
+    client = _build_client()
+    start_res = client.post(
+        "/api/workflow/start",
+        json={"niche": "ai automation", "language": "en", "keywords": ["ai"]},
+    )
+    task_id = start_res.json()["task_id"]
+
+    reject_res = client.post("/api/approve", json={"task_id": task_id, "step": "topic", "approved": False})
+    assert reject_res.status_code == 200
+    reject_body = reject_res.json()
+    assert reject_body["status"] == "failed"
+    assert "rejected" in (reject_body["error_message"] or "").lower()
+
+    app.dependency_overrides.clear()

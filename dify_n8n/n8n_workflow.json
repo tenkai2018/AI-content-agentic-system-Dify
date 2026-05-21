@@ -1,19 +1,37 @@
 {
-  "name": "AI Content Discovery & Orchestration Workflow",
+  "name": "Content Machine - Research to Dify Orchestration",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "content-pipeline",
+        "path": "content-machine/start",
+        "responseMode": "responseNode",
         "options": {}
       },
-      "id": "webhook-trigger-node-id",
-      "name": "Webhook Trigger",
+      "id": "webhook-start",
+      "name": "Webhook Start",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1,
       "position": [
-        100,
-        300
+        120,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8080/api/logs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"level\": \"INFO\",\n  \"source\": \"n8n\",\n  \"message\": \"content-machine workflow started\",\n  \"details\": {\n    \"niche\": $json.body.niche,\n    \"keywords\": $json.body.keywords\n  }\n}"
+      },
+      "id": "log-start",
+      "name": "Log Start",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        320,
+        160
       ]
     },
     {
@@ -22,129 +40,34 @@
         "sendQueryParameters": true,
         "queryParameters": {
           "parameters": [
-            {
-              "name": "part",
-              "value": "snippet"
-            },
-            {
-              "name": "q",
-              "value": "={{ $json.body.niche }} {{ $json.body.keywords }}"
-            },
-            {
-              "name": "type",
-              "value": "video"
-            },
-            {
-              "name": "maxResults",
-              "value": "20"
-            },
-            {
-              "name": "key",
-              "value": "={{ $env.YOUTUBE_API_KEY }}"
-            }
+            { "name": "part", "value": "snippet" },
+            { "name": "type", "value": "video" },
+            { "name": "maxResults", "value": "20" },
+            { "name": "q", "value": "={{$json.body.niche + ' ' + ($json.body.keywords || '')}}" },
+            { "name": "key", "value": "={{$env.YOUTUBE_API_KEY}}" }
           ]
         },
         "options": {}
       },
-      "id": "youtube-search-node-id",
+      "id": "youtube-search",
       "name": "YouTube Search",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        300,
+        320,
         300
       ]
     },
     {
       "parameters": {
-        "jsCode": "const items = $input.all();\nconst videoIds = items.map(item => {\n  return item.json.id.videoId;\n}).filter(id => id).join(',');\n\nreturn [{ json: { videoIds } }];"
+        "jsCode": "const items = $json.items || [];\nconst normalized = items.map((x) => ({\n  video_id: x?.id?.videoId || '',\n  title: x?.snippet?.title || '',\n  channel: x?.snippet?.channelTitle || '',\n  thumbnail_url: x?.snippet?.thumbnails?.high?.url || x?.snippet?.thumbnails?.default?.url || ''\n})).filter(v => v.video_id);\n\nconst selected = normalized[0] || {\n  video_id: '',\n  title: `${$node['Webhook Start'].json.body.niche} angle`,\n  channel: 'N/A',\n  thumbnail_url: ''\n};\n\nreturn [{\n  json: {\n    niche: $node['Webhook Start'].json.body.niche,\n    language: $node['Webhook Start'].json.body.language || 'en',\n    selected_title: selected.title,\n    reference_thumbnail_url: selected.thumbnail_url,\n    candidates: normalized\n  }\n}];"
       },
-      "id": "extract-ids-node-id",
-      "name": "Extract Video IDs",
+      "id": "normalize-research",
+      "name": "Normalize Research",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        500,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "url": "https://www.googleapis.com/youtube/v3/videos",
-        "sendQueryParameters": true,
-        "queryParameters": {
-          "parameters": [
-            {
-              "name": "part",
-              "value": "snippet,statistics"
-            },
-            {
-              "name": "id",
-              "value": "={{ $json.videoIds }}"
-            },
-            {
-              "name": "key",
-              "value": "={{ $env.YOUTUBE_API_KEY }}"
-            }
-          ]
-        },
-        "options": {}
-      },
-      "id": "youtube-details-node-id",
-      "name": "Get Video Details",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        700,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Nhận kết quả chi tiết từ node Get Video Details\nconst videos = $input.all()[0].json.items || [];\n\nconst output = videos.map(video => {\n  const views = parseInt(video.statistics.viewCount) || 0;\n  \n  // Giả lập/Ước lượng channel average views dựa trên dữ liệu hiện tại \n  // Trong thực tế, n8n có thể gọi API tìm kiếm channel chi tiết hơn.\n  // Để đơn giản và nhanh gọn, ta giả lập channel_average_views bằng 15% viewCount của video hoặc 50000 tối thiểu\n  const simulatedChannelAvg = Math.max(Math.round(views * 0.25), 25000);\n  const outlierScore = (views / simulatedChannelAvg) * 100;\n  \n  return {\n    json: {\n      title: video.snippet.title,\n      channelTitle: video.snippet.channelTitle,\n      videoId: video.id,\n      videoUrl: `https://youtube.com/watch?v=${video.id}`,\n      thumbnailUrl: video.snippet.thumbnails.high.url,\n      views: views,\n      channelAvgViews: simulatedChannelAvg,\n      outlierScore: parseFloat(outlierScore.toFixed(1)),\n      category: outlierScore >= 500 ? \"🔥 Viral Outlier\" : (outlierScore >= 200 ? \"⭐ Strong Outlier\" : \"Below Threshold\")\n    }\n  };\n}).filter(v => v.json.outlierScore >= 200); // Chỉ giữ lại các video có Outlier Score >= 200%\n\nreturn output.sort((a,b) => b.json.outlierScore - a.json.outlierScore);"
-      },
-      "id": "outlier-calculator-node-id",
-      "name": "Calculate Outliers",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        900,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://localhost:8080/api/logs",
-        "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "level",
-              "value": "INFO"
-            },
-            {
-              "name": "source",
-              "value": "n8n"
-            },
-            {
-              "name": "message",
-              "value": "=Tìm thấy {{ $input.all().length }} video Outlier cho ngách."
-            },
-            {
-              "name": "details",
-              "value": "={ \"videos_found\": {{ JSON.stringify($input.all().map(i => i.json.title)) }} }"
-            }
-          ]
-        },
-        "options": {}
-      },
-      "id": "fastapi-log-node-id",
-      "name": "Log to FastAPI",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        1100,
+        520,
         300
       ]
     },
@@ -156,20 +79,19 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"inputs\": {\n    \"topic\": \"AI development\",\n    \"selected_title\": \"{{ $node[\"Calculate Outliers\"].json[\"title\"] }}\",\n    \"reference_thumbnail_url\": \"{{ $node[\"Calculate Outliers\"].json[\"thumbnailUrl\"] }}\"\n  },\n  \"response_mode\": \"blocking\",\n  \"user\": \"n8n-automation-user\"\n}",
-        "options": {}
+        "jsonBody": "={\n  \"inputs\": {\n    \"niche\": $json.niche,\n    \"selected_title\": $json.selected_title,\n    \"language\": $json.language,\n    \"reference_thumbnail_url\": $json.reference_thumbnail_url\n  },\n  \"response_mode\": \"blocking\",\n  \"user\": \"content-machine-n8n\"\n}"
       },
-      "id": "dify-trigger-node-id",
-      "name": "Trigger Dify Workflow",
+      "id": "run-dify",
+      "name": "Run Dify Workflow",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        1300,
+        760,
         300
       ],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "dify-api-token-credential-id",
+          "id": "replace-with-your-credential-id",
           "name": "Dify API Token"
         }
       }
@@ -179,113 +101,67 @@
         "method": "POST",
         "url": "http://localhost:8080/api/logs",
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "level",
-              "value": "INFO"
-            },
-            {
-              "name": "source",
-              "value": "dify"
-            },
-            {
-              "name": "message",
-              "value": "=Dify đã hoàn thành xử lý AI Content. Script và LinkedIn posts đã sẵn sàng."
-            },
-            {
-              "name": "details",
-              "value": "={{ JSON.stringify($json.data.outputs) }}"
-            }
-          ]
-        },
-        "options": {}
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"level\": \"INFO\",\n  \"source\": \"dify\",\n  \"message\": \"content-machine dify completed\",\n  \"details\": {\n    \"outputs\": $json.data?.outputs || $json.outputs || {}\n  }\n}"
       },
-      "id": "fastapi-log-complete-node-id",
-      "name": "Log Completion to FastAPI",
+      "id": "log-complete",
+      "name": "Log Completion",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        1500,
+        980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": true,\n  \"message\": \"Content Machine workflow executed\",\n  \"research_candidates\": $node['Normalize Research'].json.candidates,\n  \"dify_result\": $node['Run Dify Workflow'].json\n}"
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1200,
         300
       ]
     }
   ],
   "connections": {
-    "Webhook Trigger": {
+    "Webhook Start": {
       "main": [
         [
-          {
-            "node": "YouTube Search",
-            "type": "main",
-            "index": 0
-          }
+          { "node": "Log Start", "type": "main", "index": 0 },
+          { "node": "YouTube Search", "type": "main", "index": 0 }
         ]
       ]
     },
     "YouTube Search": {
       "main": [
         [
-          {
-            "node": "Extract Video IDs",
-            "type": "main",
-            "index": 0
-          }
+          { "node": "Normalize Research", "type": "main", "index": 0 }
         ]
       ]
     },
-    "Extract Video IDs": {
+    "Normalize Research": {
       "main": [
         [
-          {
-            "node": "Get Video Details",
-            "type": "main",
-            "index": 0
-          }
+          { "node": "Run Dify Workflow", "type": "main", "index": 0 }
         ]
       ]
     },
-    "Get Video Details": {
+    "Run Dify Workflow": {
       "main": [
         [
-          {
-            "node": "Calculate Outliers",
-            "type": "main",
-            "index": 0
-          }
+          { "node": "Log Completion", "type": "main", "index": 0 }
         ]
       ]
     },
-    "Calculate Outliers": {
+    "Log Completion": {
       "main": [
         [
-          {
-            "node": "Log to FastAPI",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Log to FastAPI": {
-      "main": [
-        [
-          {
-            "node": "Trigger Dify Workflow",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Trigger Dify Workflow": {
-      "main": [
-        [
-          {
-            "node": "Log Completion to FastAPI",
-            "type": "main",
-            "index": 0
-          }
+          { "node": "Respond", "type": "main", "index": 0 }
         ]
       ]
     }

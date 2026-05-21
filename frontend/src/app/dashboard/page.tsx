@@ -89,7 +89,11 @@ function StatusLabel({status}: {status: PipelineStatus}) {
 
 function DashboardContent() {
   const searchParams = useSearchParams();
-  const taskId = searchParams.get("task_id") ?? "";
+  const initialTaskId = searchParams.get("task_id") ?? "";
+  const [taskId, setTaskId] = useState(initialTaskId);
+  const [niche, setNiche] = useState("ai automation");
+  const [language, setLanguage] = useState("en");
+  const [keywords, setKeywords] = useState("ai, workflow, content");
 
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -113,11 +117,42 @@ function DashboardContent() {
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchStatus();
+    if (taskId) fetchStatus();
+    else setLoading(false);
     if (!taskId) return;
     const timer = setInterval(fetchStatus, 4000);
     return () => clearInterval(timer);
   }, [taskId, fetchStatus]);
+
+  const startWorkflow = async () => {
+    setActionLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/workflow/start`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          niche,
+          language,
+          keywords: keywords
+            .split(",")
+            .map((k) => k.trim())
+            .filter(Boolean),
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || "Failed to start workflow");
+      const createdTaskId = body.task_id as string;
+      setTaskId(createdTaskId);
+      window.history.replaceState({}, "", `/dashboard?task_id=${createdTaskId}`);
+      setLoading(false);
+      await fetchStatus();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to start workflow");
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   const currentStep = useMemo(() => {
     if (!data) return "viral_detection";
@@ -265,7 +300,29 @@ function DashboardContent() {
         </aside>
 
         <section className={styles.resultPanel} aria-label="Pipeline results">
-          {loading ? (
+          {!taskId ? (
+            <div className={styles.resultCard}>
+              <h2 className={styles.resultTitle}>Start Content Workflow</h2>
+              {error ? <p className={styles.errorText}>{error}</p> : null}
+              <div className={styles.resultBlock}>
+                <h3>Niche</h3>
+                <input className={styles.textInput} value={niche} onChange={(e) => setNiche(e.target.value)} />
+              </div>
+              <div className={styles.resultBlock}>
+                <h3>Language</h3>
+                <input className={styles.textInput} value={language} onChange={(e) => setLanguage(e.target.value)} />
+              </div>
+              <div className={styles.resultBlock}>
+                <h3>Keywords (comma-separated)</h3>
+                <input className={styles.textInput} value={keywords} onChange={(e) => setKeywords(e.target.value)} />
+              </div>
+              <div className={styles.actionsRow}>
+                <button className={`btn btn-primary ${styles.actionBtn}`} disabled={actionLoading} onClick={startWorkflow}>
+                  Start Research
+                </button>
+              </div>
+            </div>
+          ) : loading ? (
             <div className={styles.placeholderCard}>
               <h2 className={styles.placeholderTitle}>Loading status...</h2>
               <div className={styles.loadingDots} aria-label="Loading">

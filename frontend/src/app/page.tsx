@@ -73,11 +73,13 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchLogs();
   }, []);
 
   useEffect(() => {
     if (activeTab === "logs") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchLogs();
       const interval = setInterval(fetchLogs, 5000);
       return () => clearInterval(interval);
